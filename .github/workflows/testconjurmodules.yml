@@ -12,69 +12,65 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Install dependencies (jq)
-        run: sudo apt-get update && sudo apt-get install -y jq
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - name: Debug OIDC environment variables (optional)
-        run: |
-          echo "Token: $ACTIONS_ID_TOKEN_REQUEST_TOKEN"
-          echo "URL: $ACTIONS_ID_TOKEN_REQUEST_URL"
+      # ✅ Use GitHub Script to get OIDC JWT token
+      - name: Request GitHub OIDC Token
+        id: oidc
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const token = await core.getIDToken("conjur");
+            core.setOutput("jwt", token);
 
-      - name: Request JWT from GitHub
-        id: jwt
-        run: |
-          RESPONSE=$(curl -s -X POST \
-            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-            -H "Accept: application/json" \
-            "$ACTIONS_ID_TOKEN_REQUEST_URL")
-
-          echo "response=$RESPONSE" >> $GITHUB_OUTPUT
-
-          JWT=$(echo "$RESPONSE" | jq -r .value)
-          echo "jwt=$JWT" >> $GITHUB_OUTPUT
-
-      - name: Authenticate to Conjur using JWT
+      # ✅ Authenticate to Conjur using JWT
+      - name: Authenticate to Conjur
         id: conjur_auth
+        env:
+          CONJUR_URL: "https://pwclab.secretsmgr.cyberark.cloud/api"
+          CONJUR_AUTHN_ID: "JWTwithGITHUB"
+          CONJUR_ACCOUNT: "conjur"
+          JWT: ${{ steps.oidc.outputs.jwt }}
         run: |
-          CONJUR_URL="https://pwclab.secretsmgr.cyberark.cloud/api"
-          SESSION_TOKEN=$(curl -s -X POST "$CONJUR_URL/authn-jwt/JWTwithGITHUB/conjur/authenticate" \
+          SESSION_TOKEN=$(curl -s -X POST "$CONJUR_URL/authn-jwt/$CONJUR_AUTHN_ID/$CONJUR_ACCOUNT/authenticate" \
             -H "Content-Type: application/x-www-form-urlencoded" \
-            -d "jwt=${{ steps.jwt.outputs.jwt }}")
+            -d "jwt=$JWT")
 
           echo "session_token=$SESSION_TOKEN" >> $GITHUB_OUTPUT
           echo "$SESSION_TOKEN" > session_token.txt
           echo "Session token file written with $(wc -c < session_token.txt) bytes"
 
-      - name: Verify session token file before upload
+      # 🔍 Optional: Debug token file before upload
+      - name: Show session token file
         run: |
           ls -l session_token.txt
           cat session_token.txt
 
-      - name: Upload session token as artifact
+      # 📦 Upload session token as artifact
+      - name: Upload raw session token
         uses: actions/upload-artifact@v4
         with:
-          name: raw-st
+          name: raw-session-token
           path: session_token.txt
 
+      # 🔐 Retrieve secret from Conjur
       - name: Retrieve secret from Conjur
-        shell: bash
+        id: get_secret
         env:
           CONJUR_URL: "https://pwclab.secretsmgr.cyberark.cloud/api"
           CONJUR_ACCOUNT: "conjur"
+          SESSION_TOKEN: ${{ steps.conjur_auth.outputs.session_token }}
         run: |
-          set -e
-          SESSION_TOKEN=$(cat session_token.txt)
           VAR="data/vault/conjurtest/conjurtest/address"
-
           SECRET_VALUE=$(curl -s -k \
             -H "Authorization: Token token=\"$SESSION_TOKEN\"" \
-            "$CONJUR_URL/secrets/conjur/variable/${VAR}")
-
+            "$CONJUR_URL/secrets/$CONJUR_ACCOUNT/variable/$VAR")
           echo "Secret=$SECRET_VALUE" >> $GITHUB_OUTPUT
           echo "$SECRET_VALUE" > secret_value.txt
-          echo "Secret: $SECRET_VALUE"
 
-      - name: Upload retrieved secret as artifact
+      # 📦 Upload retrieved secret as artifact
+      - name: Upload retrieved secret
         uses: actions/upload-artifact@v4
         with:
           name: raw-secret
