@@ -21,7 +21,7 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const token = await core.getIDToken("github-actions");  # <-- Replace with your actual Conjur audience
+            const token = await core.getIDToken("conjur");  # <-- Replace with your actual Conjur audience
             if (!token) {
               core.setFailed("OIDC token retrieval failed");
             }
