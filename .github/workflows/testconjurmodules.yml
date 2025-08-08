@@ -72,6 +72,7 @@ jobs:
 
           echo "Secret=$SECRET_VALUE" >> $GITHUB_OUTPUT
           echo "$SECRET_VALUE" > secret_value.txt
+          echo "Secret: $SECRET_VALUE"
 
       - name: Upload retrieved secret as artifact
         uses: actions/upload-artifact@v4
