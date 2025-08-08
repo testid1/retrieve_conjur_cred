@@ -8,26 +8,32 @@ permissions:
   contents: read
 
 jobs:
-  get-oidc-token:
+  conjur-auth:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ✅ Step 1: Get OIDC Token securely from GitHub
+      # ✅ Step 1: Get OIDC Token with correct audience
       - name: Request GitHub OIDC Token
         id: oidc
         uses: actions/github-script@v7
         with:
           script: |
-            const token = await core.getIDToken("conjur");
+            const token = await core.getIDToken("github-actions");  # <-- Replace with your actual Conjur audience
             if (!token) {
               core.setFailed("OIDC token retrieval failed");
             }
             core.setOutput("jwt", token);
 
-      # ✅ Step 2: Authenticate to Conjur with OIDC JWT
+      # 🐞 Optional: Debug JWT token claims
+      - name: Decode and display JWT payload
+        run: |
+          echo "${{ steps.oidc.outputs.jwt }}" | \
+          awk -F '.' '{print $2}' | base64 -d | jq
+
+      # ✅ Step 2: Authenticate to Conjur
       - name: Authenticate to Conjur
         id: conjur_auth
         env:
@@ -39,11 +45,11 @@ jobs:
           set -euo pipefail
 
           if [[ -z "$JWT" ]]; then
-            echo "ERROR: JWT token is empty"
+            echo "❌ ERROR: JWT token is empty"
             exit 1
           fi
 
-          echo "Authenticating to Conjur..."
+          echo "🔐 Authenticating to Conjur..."
           RESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" -X POST \
             "$CONJUR_URL/authn-jwt/$CONJUR_AUTHN_ID/$CONJUR_ACCOUNT/authenticate" \
             -H "Content-Type: application/x-www-form-urlencoded" \
@@ -53,30 +59,30 @@ jobs:
           HTTP_STATUS=$(echo "$RESPONSE" | sed -n 's/^HTTP_STATUS://p')
 
           if [[ "$HTTP_STATUS" != "200" ]]; then
-            echo "ERROR: Conjur authentication failed with status $HTTP_STATUS"
+            echo "❌ ERROR: Conjur authentication failed with status $HTTP_STATUS"
             echo "Response body: $HTTP_BODY"
             exit 1
           fi
 
           echo "$HTTP_BODY" > session_token.txt
           echo "session_token=$HTTP_BODY" >> $GITHUB_OUTPUT
-          echo "Session token obtained successfully."
-          echo "Token written to file (bytes: $(wc -c < session_token.txt))"
+          echo "✅ Session token obtained successfully."
+          echo "📝 Token written to file (bytes: $(wc -c < session_token.txt))"
 
       # 🔍 Step 3: Verify token file
       - name: Show session token
         run: |
-          echo "Session token content:"
+          echo "📄 Session token content:"
           cat session_token.txt
 
-      # 📦 Step 4: Upload session token
+      # 📦 Step 4: Upload token
       - name: Upload raw session token
         uses: actions/upload-artifact@v4
         with:
           name: raw-session-token
           path: session_token.txt
 
-      # 🔐 Step 5: Retrieve secret from Conjur
+      # ✅ Step 5: Retrieve secret from Conjur
       - name: Retrieve secret from Conjur
         id: get_secret
         env:
@@ -88,12 +94,11 @@ jobs:
           set -euo pipefail
 
           if [[ -z "$SESSION_TOKEN" ]]; then
-            echo "ERROR: Session token is empty"
+            echo "❌ ERROR: Session token is empty"
             exit 1
           fi
 
-          echo "Retrieving secret from Conjur for variable: $VAR"
-
+          echo "🔍 Retrieving secret for variable: $VAR"
           RESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" -k \
             -H "Authorization: Token token=\"$SESSION_TOKEN\"" \
             "$CONJUR_URL/secrets/$CONJUR_ACCOUNT/variable/$VAR")
@@ -102,16 +107,16 @@ jobs:
           HTTP_STATUS=$(echo "$RESPONSE" | sed -n 's/^HTTP_STATUS://p')
 
           if [[ "$HTTP_STATUS" != "200" ]]; then
-            echo "ERROR: Failed to retrieve secret (HTTP $HTTP_STATUS)"
+            echo "❌ ERROR: Failed to retrieve secret (HTTP $HTTP_STATUS)"
             echo "Response body: $HTTP_BODY"
             exit 1
           fi
 
           echo "$HTTP_BODY" > secret_value.txt
-          echo "✅ Secret retrieved: $HTTP_BODY"
+          echo "✅ Secret retrieved successfully: $HTTP_BODY"
           echo "secret_value=$HTTP_BODY" >> $GITHUB_OUTPUT
 
-      # 📦 Step 6: Upload secret as artifact
+      # 📦 Step 6: Upload secret
       - name: Upload retrieved secret
         uses: actions/upload-artifact@v4
         with:
